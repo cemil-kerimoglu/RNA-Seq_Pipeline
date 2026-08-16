@@ -1,6 +1,5 @@
 name: setd1b-reference
-channels: [conda-forge, bioconda, defaults]
-channel_priority: strict
+channels: [conda-forge, bioconda, nodefaults]
 dependencies:
   - curl
   - pigz

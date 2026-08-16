@@ -1,0 +1,47 @@
+# Single-node profile for the Google Compute Engine e2-highmem-8 VM used for
+# this project (8 vCPUs, 64 GB RAM, approximately 500 GB usable disk).
+executor: local
+cores: 8
+latency-wait: 60
+rerun-incomplete: true
+printshellcmds: true
+show-failed-logs: true
+software-deployment-method: conda
+
+# Keep headroom for Ubuntu, Conda, filesystem metadata, and interactive SSH.
+resources:
+  mem_mb: 60000
+  disk_mb: 450000
+
+default-resources:
+  mem_mb: 4000
+  disk_mb: 10000
+
+# Make eight-core execution explicit instead of relying on Snakemake to scale
+# the larger HPC thread requests down automatically.
+set-threads:
+  star_index: 8
+  star_align: 8
+  featurecounts_exon: 8
+  featurecounts_gene_body: 8
+
+# These values constrain concurrent local scheduling; they do not partition
+# the VM's physical memory or disk.
+set-resources:
+  star_index:
+    mem_mb: 50000
+    disk_mb: 40000
+  star_align:
+    mem_mb: 32000
+    disk_mb: 50000
+  fasterq_dump:
+    mem_mb: 8000
+    disk_mb: 50000
+  featurecounts_exon:
+    mem_mb: 12000
+  featurecounts_gene_body:
+    mem_mb: 12000
+  deseq2:
+    mem_mb: 12000
+  topgo:
+    mem_mb: 8000

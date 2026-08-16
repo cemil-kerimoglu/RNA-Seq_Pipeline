@@ -3,6 +3,7 @@
 /results/
 /logs/
 /tmp/
+/exports/
 /resources/reference/
 .snakemake/
 *.conda

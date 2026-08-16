@@ -1,6 +1,5 @@
 name: setd1b-counts
-channels: [conda-forge, bioconda, defaults]
-channel_priority: strict
+channels: [conda-forge, bioconda, nodefaults]
 dependencies:
   - subread>=2.0.5,<3
   - python=3.12

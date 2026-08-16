@@ -86,6 +86,8 @@ The biological/statistical backbone remains intentionally recognizable: **STAR -
 
 - Snakemake DAG instead of hand-run commands.
 - Per-rule Conda environments and pinned major tool versions.
+- A single-VM Google Compute Engine profile sized for 8 vCPUs, 64 GB RAM,
+  and a 500 GB boot disk.
 - A Slurm executor profile for HPC execution.
 - `prefetch`, `vdb-validate`, and `fasterq-dump` for traceable SRA retrieval.
 - FastQC both before and after filtering.
@@ -104,15 +106,18 @@ The biological/statistical backbone remains intentionally recognizable: **STAR -
 ## 6. Folder structure
 
 ```text
-setd1b_rnaseq_pipeline/
+RNA-Seq_Pipeline/
 ├── README.md
 ├── Makefile
 ├── bootstrap/
-│   └── environment.yaml
+│   ├── environment.yaml
+│   └── setup_gcp_vm.sh
 ├── config/
 │   ├── config.yaml
 │   └── samples.tsv
 ├── profiles/
+│   ├── gcp-vm/
+│   │   └── profile.v9+.yaml
 │   └── slurm/
 │       └── profile.v9+.yaml
 ├── resources/
@@ -139,17 +144,125 @@ setd1b_rnaseq_pipeline/
 
 ## 7. Bootstrap the workflow environment
 
-On an HPC login node with Conda/Mamba available:
+The workflow requires Linux. On a system that already has Conda or Mamba:
 
 ```bash
-cd setd1b_rnaseq_pipeline
+cd RNA-Seq_Pipeline
 mamba env create -f bootstrap/environment.yaml
 conda activate setd1b-rnaseq-workflow
 ```
 
 Snakemake will create the smaller per-rule environments automatically when `--software-deployment-method conda` is enabled.
 
-## 8. Inspect before running
+The environment files use `conda-forge` and `bioconda`, with `nodefaults` to
+prevent an existing user-level `defaults` channel from being mixed into the
+solve. The Makefile applies strict channel priority only to each workflow
+command. This does **not** remove Conda, rewrite the user's global Conda
+configuration, or alter other environments.
+
+## 8. Run on the Google Compute Engine VM
+
+The included `gcp-vm` profile is tuned to this project's current VM: 8 vCPUs,
+about 62 GiB usable RAM, and about 484 GiB usable disk. It runs Snakemake's
+local executor on the remote Linux machine; Google Compute Engine provides the
+machine, while Snakemake schedules the individual rules on it.
+
+Google One/Google AI storage for Drive, Gmail, and Photos is separate from
+Google Cloud Compute Engine. The VM and its provisioned disk use the Cloud
+Billing account attached to the Google Cloud project.
+
+### First-time VM preparation
+
+Open an SSH terminal to the VM in Google Cloud Console and run:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y git curl bzip2 tmux make
+git clone https://github.com/cemil-kerimoglu/RNA-Seq_Pipeline.git
+cd RNA-Seq_Pipeline
+bash bootstrap/setup_gcp_vm.sh
+source "$HOME/miniforge3/etc/profile.d/conda.sh"
+conda activate setd1b-rnaseq-workflow
+```
+
+If the repository was already cloned, use `cd` to enter it and run `git pull`
+instead of cloning it again. The setup script installs Miniforge only inside
+the current Linux user's home directory, applies strict channel priority only
+while solving this environment, and creates or updates the workflow's bootstrap
+environment. It is safe to rerun.
+
+### Validate before spending compute time
+
+```bash
+make gcp-dryrun
+```
+
+This constructs and validates the complete DAG without executing it.
+
+### Run persistently inside tmux
+
+Browser SSH sessions can disconnect. Start the workflow inside `tmux`:
+
+```bash
+tmux new -s setd1b
+source "$HOME/miniforge3/etc/profile.d/conda.sh"
+conda activate setd1b-rnaseq-workflow
+cd "$HOME/RNA-Seq_Pipeline"
+make gcp-envs
+make gcp-run
+```
+
+`make gcp-envs` pre-creates all rule-specific Conda environments, so dependency
+problems are discovered before large downloads and alignment start. It is kept
+inside `tmux` because the initial dependency solve can take some time.
+
+Detach without stopping the workflow by pressing `Ctrl-b`, releasing the keys,
+and then pressing `d`. Later, reconnect over SSH and run:
+
+```bash
+tmux attach -t setd1b
+```
+
+Snakemake uses `rerun-incomplete: true`, so after an interrupted VM or process
+it is normally sufficient to activate the environment, return to the repository,
+and run `make gcp-run` again. Completed outputs are retained.
+
+### Monitor, package, and download the results
+
+In a second SSH terminal, useful checks are:
+
+```bash
+free -h
+df -h /
+du -sh data work results 2>/dev/null
+```
+
+After successful completion:
+
+```bash
+make archive-results
+ls -lh exports/setd1b-results.tar.gz
+```
+
+Download `exports/setd1b-results.tar.gz` through the Compute Engine SSH file
+transfer menu. Alternatively, from a laptop terminal with Google Cloud CLI
+installed, run:
+
+```bash
+gcloud compute scp \
+  rnaseq-vm:~/RNA-Seq_Pipeline/exports/setd1b-results.tar.gz . \
+  --zone=europe-west10-a
+```
+
+The raw reads and large intermediate BAM/index files are deliberately not
+included in the archive.
+
+Finally, stop the VM from the Google Cloud Console when it is not in use.
+Stopping ends vCPU/RAM charges, although the persistent boot disk continues to
+incur storage charges until deleted. Do not delete the VM or disk until the
+results have been downloaded and checked.
+
+## 9. Inspect before running
 
 Always start with a dry run:
 
@@ -171,7 +284,7 @@ You can also render the DAG on a machine with Graphviz:
 snakemake --snakefile workflow/Snakefile --dag | dot -Tpdf > dag.pdf
 ```
 
-## 9. Run on Slurm
+## 10. Run on Slurm
 
 Edit `profiles/slurm/profile.v9+.yaml` first. In particular, replace the generic partition name `compute` and adapt memory/runtime defaults to the local cluster.
 
@@ -193,7 +306,7 @@ snakemake --snakefile workflow/Snakefile \
   --printshellcmds
 ```
 
-## 10. Key outputs
+## 11. Key outputs
 
 ### QC
 
@@ -253,7 +366,7 @@ results/provenance/sha256sums.txt
 results/deseq2/sessionInfo.txt
 ```
 
-## 11. Important analysis decisions to review before real use
+## 12. Important analysis decisions to review before real use
 
 ### Strandedness
 
@@ -275,7 +388,7 @@ The workflow intentionally **does not deduplicate RNA-seq BAM files**. Duplicate
 
 The original paper calculated RPKM for descriptive expression plots. This workflow does not use RPKM for differential testing. DESeq2 receives raw counts. If TPM/RPKM values are wanted for visualization or cross-gene descriptive purposes, add them as a separate derived output rather than feeding them to DESeq2.
 
-## 12. Paper-like versus modern GO universes
+## 13. Paper-like versus modern GO universes
 
 `config/config.yaml` defaults to:
 
@@ -295,7 +408,7 @@ gene_ontology:
 
 Both choices are explicit because gene-universe definition can materially affect enrichment results.
 
-## 13. What this scaffold deliberately does not pretend to know
+## 14. What this scaffold deliberately does not pretend to know
 
 A high-quality reanalysis should distinguish **known provenance** from **reasonable reconstruction**. The following are not claimed to be known from the paper:
 
@@ -306,7 +419,7 @@ A high-quality reanalysis should distinguish **known provenance** from **reasona
 
 Those choices are surfaced in configuration rather than silently guessed.
 
-## 14. If I were deploying this for production
+## 15. If I were deploying this for production
 
 For a real institute/core-facility analysis I would additionally consider:
 
@@ -320,7 +433,7 @@ For a real institute/core-facility analysis I would additionally consider:
 
 The present repository is intentionally readable enough to study line-by-line while still following an HPC workflow-engine pattern.
 
-## 15. Why a custom Snakemake workflow instead of simply calling nf-core/rnaseq?
+## 16. Why a custom Snakemake workflow instead of simply calling nf-core/rnaseq?
 
 As of August 2026, nf-core/rnaseq is an excellent turnkey choice for routine production RNA-seq and its current stable branch provides several alignment/quantification modes plus extensive QC. For this study, however, a small custom workflow is useful pedagogically and scientifically because you asked for code that can be inspected line-by-line and because the original experiment is **nuclear RNA-seq with an explicit requirement to include unspliced signal**. The custom `gene_body` featureCounts branch makes that project-specific decision visible rather than hiding it behind a generic transcript-quantification default.
 

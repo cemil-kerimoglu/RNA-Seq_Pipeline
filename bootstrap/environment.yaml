@@ -2,8 +2,7 @@ name: setd1b-rnaseq-workflow
 channels:
   - conda-forge
   - bioconda
-  - defaults
-channel_priority: strict
+  - nodefaults
 dependencies:
   - python=3.12
   - snakemake=9.25.1
