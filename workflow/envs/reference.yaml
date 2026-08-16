@@ -1,0 +1,7 @@
+name: setd1b-reference
+channels: [conda-forge, bioconda, defaults]
+channel_priority: strict
+dependencies:
+  - curl
+  - pigz
+  - star=2.7.11b

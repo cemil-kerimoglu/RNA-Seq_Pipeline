@@ -1,0 +1,6 @@
+name: setd1b-download
+channels: [conda-forge, bioconda, defaults]
+channel_priority: strict
+dependencies:
+  - sra-tools=3.4.1
+  - pigz

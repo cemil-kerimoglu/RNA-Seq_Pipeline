@@ -1,0 +1,7 @@
+title: "SETD1B neuronal nuclear RNA-seq reanalysis"
+subtitle: "GSE180326 | control vs Setd1b cKO"
+report_comment: >
+  Modernized reproducible reanalysis scaffold. Inspect raw/post-trim FastQC,
+  fastp, STAR, samtools and featureCounts metrics before interpreting DE results.
+show_analysis_paths: false
+show_analysis_time: true

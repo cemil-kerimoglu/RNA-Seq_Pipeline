@@ -1,0 +1,7 @@
+name: setd1b-qc
+channels: [conda-forge, bioconda, defaults]
+channel_priority: strict
+dependencies:
+  - fastqc=0.12.1
+  - fastp=1.3.6
+  - multiqc=1.35

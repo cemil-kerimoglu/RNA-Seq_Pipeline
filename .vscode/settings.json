@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "Snakefile": "snakemake",
+        "*.smk": "snakemake"
+    }
+}

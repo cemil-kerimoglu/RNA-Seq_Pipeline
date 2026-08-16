@@ -1,0 +1,12 @@
+name: setd1b-rnaseq-r
+channels: [conda-forge, bioconda, defaults]
+channel_priority: strict
+dependencies:
+  - r-base=4.6
+  - bioconductor-deseq2=1.52
+  - bioconductor-apeglm
+  - bioconductor-topgo
+  - bioconductor-org.mm.eg.db
+  - bioconductor-annotationdbi
+  - r-ggplot2
+  - r-pheatmap

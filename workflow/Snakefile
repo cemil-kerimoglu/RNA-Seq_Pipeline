@@ -1,0 +1,486 @@
+import csv
+from pathlib import Path
+
+# Load the YAML values into Snakemake's global ``config`` dictionary.
+configfile: "config/config.yaml"
+
+SAMPLESHEET = config["project"]["samplesheet"]
+with open(SAMPLESHEET, newline="") as fh:
+    ROWS = list(csv.DictReader(fh, delimiter="\t"))
+
+SAMPLES = [r["sample"] for r in ROWS]
+if not SAMPLES:
+    raise ValueError("samples.tsv is empty")
+if len(SAMPLES) != len(set(SAMPLES)):
+    raise ValueError("Sample names must be unique")
+if any(not r.get("srr", "").startswith("SRR") for r in ROWS):
+    raise ValueError("Every sample needs an SRR run accession")
+if any(r.get("layout") != "SE" for r in ROWS):
+    raise ValueError("This study-specific workflow currently supports the six single-end neuronal libraries only")
+if len({r.get("condition") for r in ROWS}) < 2:
+    raise ValueError("At least two conditions are required for differential expression")
+SRR = {r["sample"]: r["srr"] for r in ROWS}
+STRANDEDNESS = int(config["quantification"]["strandedness"])
+if STRANDEDNESS not in {0, 1, 2}:
+    raise ValueError("quantification.strandedness must be 0, 1, or 2")
+
+RAW = "data/raw/{sample}.fastq.gz"
+TRIM = "work/trimmed/{sample}.trimmed.fastq.gz"
+BAM = "work/alignment/{sample}/Aligned.sortedByCoord.out.bam"
+BAI = BAM + ".bai"
+STAR_LOG = "work/alignment/{sample}/Log.final.out"
+SJ = "work/alignment/{sample}/SJ.out.tab"
+FLAGSTAT = "work/alignment_qc/{sample}.flagstat.txt"
+STATS = "work/alignment_qc/{sample}.stats.txt"
+
+REF_FASTA = "resources/reference/GRCm38.primary_assembly.genome.fa"
+REF_GTF = "resources/reference/gencode.vM25.primary_assembly.annotation.gtf"
+STAR_INDEX = "resources/reference/star_index"
+SAF = "resources/reference/gencode.vM25.gene_body.saf"
+GENE_MAP = "resources/reference/gencode.vM25.gene_map.tsv"
+
+BAMS = expand(BAM, sample=SAMPLES)
+BAM_LIST = " ".join(BAMS)
+COUNT_MODE = config["quantification"]["count_mode"]
+if COUNT_MODE not in {"exon", "gene_body"}:
+    raise ValueError("quantification.count_mode must be 'exon' or 'gene_body'")
+SELECTED_COUNTS = f"results/counts/{COUNT_MODE}_counts.tsv"
+
+DE_DIR = "results/deseq2"
+GO_DIR = "results/topgo"
+
+rule all:
+    input:
+        "results/multiqc/multiqc_report.html",
+        "results/provenance/sha256sums.txt",
+        f"{DE_DIR}/deseq2_all.tsv",
+        f"{DE_DIR}/deseq2_paper_significant.tsv",
+        f"{DE_DIR}/deseq2_fdr_significant.tsv",
+        f"{DE_DIR}/PCA.pdf",
+        f"{DE_DIR}/MA_apeglm.pdf",
+        f"{GO_DIR}/paper_down_BP.tsv",
+        f"{GO_DIR}/paper_up_BP.tsv",
+        f"{GO_DIR}/fdr_down_BP.tsv",
+        f"{GO_DIR}/fdr_up_BP.tsv",
+
+
+rule fasterq_dump:
+    output:
+        RAW
+    params:
+        srr=lambda wc: SRR[wc.sample],
+        sra_root="work/sra",
+        tmp_root="work/sra_tmp",
+    threads: 8
+    conda:
+        "envs/download.yaml"
+    log:
+        "logs/download/{sample}.log"
+    shell:
+        r"""
+        set -euo pipefail
+        mkdir -p {params.sra_root} {params.tmp_root}/{wildcards.sample} $(dirname {output}) $(dirname {log})
+        prefetch {params.srr} --max-size u --output-directory {params.sra_root} >> {log} 2>&1
+        SRAFILE="{params.sra_root}/{params.srr}/{params.srr}.sra"
+        vdb-validate "$SRAFILE" >> {log} 2>&1
+        fasterq-dump "$SRAFILE" \
+          --threads {threads} \
+          --temp {params.tmp_root}/{wildcards.sample} \
+          --outdir {params.tmp_root}/{wildcards.sample} >> {log} 2>&1
+        test -s {params.tmp_root}/{wildcards.sample}/{params.srr}.fastq
+        pigz -p {threads} -c {params.tmp_root}/{wildcards.sample}/{params.srr}.fastq > {output}
+        rm -f {params.tmp_root}/{wildcards.sample}/{params.srr}.fastq
+        """
+
+
+rule fastqc_raw:
+    input:
+        RAW
+    output:
+        html="work/qc/raw/{sample}_fastqc.html",
+        zip="work/qc/raw/{sample}_fastqc.zip"
+    threads: 2
+    conda:
+        "envs/qc.yaml"
+    shell:
+        r"""
+        mkdir -p work/qc/raw
+        fastqc --threads {threads} --outdir work/qc/raw {input}
+        """
+
+
+rule fastp:
+    input:
+        RAW
+    output:
+        fastq=TRIM,
+        html="work/qc/fastp/{sample}.html",
+        json="work/qc/fastp/{sample}.json"
+    params:
+        q=config["fastp"]["qualified_quality_phred"],
+        unqual=config["fastp"]["unqualified_percent_limit"],
+        minlen=config["fastp"]["length_required"],
+        polyg="--trim_poly_g" if config["fastp"]["trim_poly_g"] else "--disable_trim_poly_g",
+    threads: 8
+    conda:
+        "envs/qc.yaml"
+    log:
+        "logs/fastp/{sample}.log"
+    shell:
+        r"""
+        set -euo pipefail
+        mkdir -p work/trimmed work/qc/fastp $(dirname {log})
+        fastp \
+          --in1 {input} \
+          --out1 {output.fastq} \
+          --thread {threads} \
+          --qualified_quality_phred {params.q} \
+          --unqualified_percent_limit {params.unqual} \
+          --length_required {params.minlen} \
+          {params.polyg} \
+          --html {output.html} \
+          --json {output.json} > {log} 2>&1
+        """
+
+
+rule fastqc_trimmed:
+    input:
+        TRIM
+    output:
+        html="work/qc/trimmed/{sample}.trimmed_fastqc.html",
+        zip="work/qc/trimmed/{sample}.trimmed_fastqc.zip"
+    threads: 2
+    conda:
+        "envs/qc.yaml"
+    shell:
+        r"""
+        mkdir -p work/qc/trimmed
+        fastqc --threads {threads} --outdir work/qc/trimmed {input}
+        """
+
+
+rule reference_fasta:
+    output:
+        REF_FASTA
+    params:
+        url=config["reference"]["fasta_url"]
+    conda:
+        "envs/reference.yaml"
+    log:
+        "logs/reference/fasta.log"
+    shell:
+        r"""
+        set -euo pipefail
+        mkdir -p $(dirname {output}) $(dirname {log})
+        curl -L --fail --retry 5 {params.url} 2>> {log} | pigz -dc > {output}
+        test -s {output}
+        """
+
+
+rule reference_gtf:
+    output:
+        REF_GTF
+    params:
+        url=config["reference"]["gtf_url"]
+    conda:
+        "envs/reference.yaml"
+    log:
+        "logs/reference/gtf.log"
+    shell:
+        r"""
+        set -euo pipefail
+        mkdir -p $(dirname {output}) $(dirname {log})
+        curl -L --fail --retry 5 {params.url} 2>> {log} | pigz -dc > {output}
+        test -s {output}
+        """
+
+
+rule gene_body_saf:
+    input:
+        REF_GTF
+    output:
+        saf=SAF,
+        gene_map=GENE_MAP
+    conda:
+        "envs/counts.yaml"
+    shell:
+        r"""
+        python workflow/scripts/build_gene_body_saf.py --gtf {input} --saf {output.saf} --map {output.gene_map}
+        """
+
+
+rule star_index:
+    input:
+        fasta=REF_FASTA,
+        gtf=REF_GTF
+    output:
+        directory(STAR_INDEX)
+    params:
+        sjdb=config["reference"]["sjdb_overhang"]
+    threads: 16
+    conda:
+        "envs/reference.yaml"
+    log:
+        "logs/reference/star_index.log"
+    shell:
+        r"""
+        set -euo pipefail
+        rm -rf {output}
+        mkdir -p {output} $(dirname {log})
+        STAR \
+          --runMode genomeGenerate \
+          --runThreadN {threads} \
+          --genomeDir {output} \
+          --genomeFastaFiles {input.fasta} \
+          --sjdbGTFfile {input.gtf} \
+          --sjdbOverhang {params.sjdb} > {log} 2>&1
+        """
+
+
+rule star_align:
+    input:
+        fastq=TRIM,
+        index=STAR_INDEX
+    output:
+        bam=BAM,
+        bai=BAI,
+        logfinal=STAR_LOG,
+        sj=SJ
+    params:
+        prefix=lambda wc: f"work/alignment/{wc.sample}/",
+        twopass="--twopassMode Basic" if config["alignment"]["star_two_pass"] else "",
+        multimap=config["alignment"]["out_filter_multimap_nmax"]
+    threads: 16
+    conda:
+        "envs/alignment.yaml"
+    log:
+        "logs/star/{sample}.log"
+    shell:
+        r"""
+        set -euo pipefail
+        mkdir -p {params.prefix} $(dirname {log})
+        STAR \
+          --runThreadN {threads} \
+          --genomeDir {input.index} \
+          --readFilesIn {input.fastq} \
+          --readFilesCommand pigz -dc \
+          {params.twopass} \
+          --outFilterMultimapNmax {params.multimap} \
+          --outSAMtype BAM SortedByCoordinate \
+          --outSAMattributes NH HI AS nM MD \
+          --outFileNamePrefix {params.prefix} > {log} 2>&1
+        samtools index -@ {threads} {output.bam}
+        """
+
+
+rule samtools_qc:
+    input:
+        bam=BAM,
+        bai=BAI
+    output:
+        flagstat=FLAGSTAT,
+        stats=STATS
+    threads: 4
+    conda:
+        "envs/alignment.yaml"
+    shell:
+        r"""
+        mkdir -p work/alignment_qc
+        samtools flagstat -@ {threads} {input.bam} > {output.flagstat}
+        samtools stats -@ {threads} {input.bam} > {output.stats}
+        """
+
+
+rule featurecounts_exon:
+    input:
+        gtf=REF_GTF,
+        bams=BAMS
+    output:
+        raw="work/counts/exon_featureCounts.txt",
+        summary="work/counts/exon_featureCounts.txt.summary",
+        clean="results/counts/exon_counts.tsv"
+    params:
+        bams=BAM_LIST,
+        strand=STRANDEDNESS,
+        mapq=config["quantification"]["min_mapq"]
+    threads: 12
+    conda:
+        "envs/counts.yaml"
+    log:
+        "logs/counts/exon.log"
+    shell:
+        r"""
+        set -euo pipefail
+        mkdir -p work/counts results/counts $(dirname {log})
+        featureCounts \
+          -T {threads} \
+          -a {input.gtf} \
+          -o {output.raw} \
+          -t exon -g gene_id \
+          -s {params.strand} \
+          -Q {params.mapq} \
+          --primary \
+          {params.bams} > {log} 2>&1
+        python workflow/scripts/clean_featurecounts.py --input {output.raw} --samples {SAMPLESHEET} --output {output.clean}
+        """
+
+
+rule featurecounts_gene_body:
+    input:
+        saf=SAF,
+        bams=BAMS
+    output:
+        raw="work/counts/gene_body_featureCounts.txt",
+        summary="work/counts/gene_body_featureCounts.txt.summary",
+        clean="results/counts/gene_body_counts.tsv"
+    params:
+        bams=BAM_LIST,
+        strand=STRANDEDNESS,
+        mapq=config["quantification"]["min_mapq"]
+    threads: 12
+    conda:
+        "envs/counts.yaml"
+    log:
+        "logs/counts/gene_body.log"
+    shell:
+        r"""
+        set -euo pipefail
+        mkdir -p work/counts results/counts $(dirname {log})
+        featureCounts \
+          -T {threads} \
+          -F SAF -a {input.saf} \
+          -o {output.raw} \
+          -s {params.strand} \
+          -Q {params.mapq} \
+          --primary \
+          {params.bams} > {log} 2>&1
+        python workflow/scripts/clean_featurecounts.py --input {output.raw} --samples {SAMPLESHEET} --output {output.clean}
+        """
+
+
+rule selected_counts:
+    input:
+        SELECTED_COUNTS
+    output:
+        "work/selected_counts.tsv"
+    shell:
+        "cp {input} {output}"
+
+
+rule deseq2:
+    input:
+        counts="work/selected_counts.tsv",
+        samples=SAMPLESHEET,
+        gene_map=GENE_MAP
+    output:
+        all=f"{DE_DIR}/deseq2_all.tsv",
+        paper=f"{DE_DIR}/deseq2_paper_significant.tsv",
+        paper_up=f"{DE_DIR}/deseq2_paper_up.tsv",
+        paper_down=f"{DE_DIR}/deseq2_paper_down.tsv",
+        fdr=f"{DE_DIR}/deseq2_fdr_significant.tsv",
+        fdr_up=f"{DE_DIR}/deseq2_fdr_up.tsv",
+        fdr_down=f"{DE_DIR}/deseq2_fdr_down.tsv",
+        pca=f"{DE_DIR}/PCA.pdf",
+        heatmap=f"{DE_DIR}/sample_distance_heatmap.pdf",
+        ma=f"{DE_DIR}/MA_apeglm.pdf",
+        volcano=f"{DE_DIR}/volcano.pdf",
+        norm=f"{DE_DIR}/normalized_counts.tsv",
+        vst=f"{DE_DIR}/vst_counts.tsv",
+        dds=f"{DE_DIR}/dds.rds",
+        vsd=f"{DE_DIR}/vsd.rds",
+        summary=f"{DE_DIR}/summary.txt",
+        session=f"{DE_DIR}/sessionInfo.txt"
+    params:
+        outdir=DE_DIR,
+        ref=config["differential_expression"]["reference_level"],
+        test=config["differential_expression"]["test_level"],
+        min_count=config["differential_expression"]["min_count_per_sample"],
+        paper_padj=config["differential_expression"]["paper_padj"],
+        paper_fc=config["differential_expression"]["paper_abs_fold_change"],
+        modern_fdr=config["differential_expression"]["modern_fdr"]
+    conda:
+        "envs/rnaseq_r.yaml"
+    log:
+        "logs/deseq2/deseq2.log"
+    shell:
+        r"""
+        set -euo pipefail
+        mkdir -p {params.outdir} $(dirname {log})
+        Rscript workflow/scripts/deseq2.R \
+          {input.counts} {input.samples} {input.gene_map} {params.outdir} \
+          {params.ref} {params.test} {params.min_count} \
+          {params.paper_padj} {params.paper_fc} {params.modern_fdr} > {log} 2>&1
+        """
+
+
+rule topgo:
+    input:
+        de=f"{DE_DIR}/deseq2_all.tsv",
+        selected=lambda wc: f"{DE_DIR}/deseq2_{wc.set}_{wc.direction}.tsv",
+        counts="work/selected_counts.tsv"
+    output:
+        table=f"{GO_DIR}/{{set}}_{{direction}}_BP.tsv",
+        summary=f"{GO_DIR}/{{set}}_{{direction}}_BP.summary.txt"
+    wildcard_constraints:
+        set="paper|fdr",
+        direction="up|down"
+    params:
+        ontology=config["gene_ontology"]["ontology"],
+        universe=config["gene_ontology"]["universe"],
+        node_size=config["gene_ontology"]["node_size"],
+        paper_p=config["gene_ontology"]["paper_weight_p"],
+        label=lambda wc: f"{wc.set}_{wc.direction}"
+    conda:
+        "envs/rnaseq_r.yaml"
+    log:
+        "logs/topgo/{set}_{direction}.log"
+    shell:
+        r"""
+        set -euo pipefail
+        mkdir -p {GO_DIR} $(dirname {log})
+        Rscript workflow/scripts/topgo.R \
+          {input.de} {input.selected} {input.counts} {output.table} \
+          {params.ontology} {params.universe} {params.node_size} {params.paper_p} {params.label} > {log} 2>&1
+        """
+
+
+rule multiqc:
+    input:
+        raw_fastqc=expand("work/qc/raw/{sample}_fastqc.zip", sample=SAMPLES),
+        trim_fastqc=expand("work/qc/trimmed/{sample}.trimmed_fastqc.zip", sample=SAMPLES),
+        fastp_json=expand("work/qc/fastp/{sample}.json", sample=SAMPLES),
+        star_logs=expand(STAR_LOG, sample=SAMPLES),
+        flagstats=expand(FLAGSTAT, sample=SAMPLES),
+        stats=expand(STATS, sample=SAMPLES),
+        exon_summary="work/counts/exon_featureCounts.txt.summary",
+        gene_body_summary="work/counts/gene_body_featureCounts.txt.summary"
+    output:
+        html="results/multiqc/multiqc_report.html",
+        data=directory("results/multiqc/multiqc_data")
+    conda:
+        "envs/qc.yaml"
+    log:
+        "logs/multiqc.log"
+    shell:
+        r"""
+        set -euo pipefail
+        mkdir -p results/multiqc
+        multiqc work results/counts \
+          --config resources/multiqc_config.yaml \
+          --outdir results/multiqc \
+          --force > {log} 2>&1
+        """
+
+
+rule checksums:
+    input:
+        fastqs=expand(RAW, sample=SAMPLES),
+        fasta=REF_FASTA,
+        gtf=REF_GTF
+    output:
+        "results/provenance/sha256sums.txt"
+    shell:
+        r"""
+        mkdir -p $(dirname {output})
+        sha256sum {input.fastqs} {input.fasta} {input.gtf} > {output}
+        """

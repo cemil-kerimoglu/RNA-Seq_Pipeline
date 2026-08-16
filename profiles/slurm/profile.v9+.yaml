@@ -1,0 +1,38 @@
+executor: slurm
+jobs: 100
+latency-wait: 60
+rerun-incomplete: true
+printshellcmds: true
+show-failed-logs: true
+software-deployment-method: conda
+
+# Adapt these defaults to the local cluster.  They are intentionally generic.
+default-resources:
+  mem_mb: 4000
+  runtime: 60
+  disk_mb: 10000
+  slurm_partition: compute
+
+set-resources:
+  star_index:
+    mem_mb: 50000
+    runtime: 240
+  star_align:
+    mem_mb: 32000
+    runtime: 240
+  fasterq_dump:
+    mem_mb: 8000
+    runtime: 240
+    disk_mb: 50000
+  featurecounts_exon:
+    mem_mb: 12000
+    runtime: 120
+  featurecounts_gene_body:
+    mem_mb: 12000
+    runtime: 120
+  deseq2:
+    mem_mb: 12000
+    runtime: 120
+  topgo:
+    mem_mb: 8000
+    runtime: 120

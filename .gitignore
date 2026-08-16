@@ -1,0 +1,9 @@
+/data/raw/
+/work/
+/results/
+/logs/
+/tmp/
+/resources/reference/
+.snakemake/
+*.conda
+.DS_Store

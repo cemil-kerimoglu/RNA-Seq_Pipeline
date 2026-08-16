@@ -1,0 +1,11 @@
+name: setd1b-rnaseq-workflow
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+channel_priority: strict
+dependencies:
+  - python=3.12
+  - snakemake=9.25.1
+  - snakemake-executor-plugin-slurm
+  - mamba
