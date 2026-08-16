@@ -160,6 +160,12 @@ solve. The Makefile applies strict channel priority only to each workflow
 command. This does **not** remove Conda, rewrite the user's global Conda
 configuration, or alter other environments.
 
+The downstream R environment is pinned as one internally consistent
+Bioconductor 3.22 family: R 4.5, DESeq2 1.50.2, apeglm 1.32.0, topGO 2.62.0,
+org.Mm.eg.db 3.22.0, and AnnotationDbi 1.72.0. Bioconductor releases are tied
+to specific R minor versions, so these pins must be advanced together rather
+than individually.
+
 ## 8. Run on the Google Compute Engine VM
 
 The included `gcp-vm` profile is tuned to this project's current VM: 8 vCPUs,
