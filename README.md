@@ -8,14 +8,14 @@ It is designed as a **modernized reanalysis**, not as a claim of byte-for-byte r
 
 The workflow uses only the six neuronal RNA-seq samples underlying the main control-vs-Setd1b-cKO comparison, not the whole-CA libraries and not the single-nucleus RNA-seq experiment.
 
-| Sample | GEO | SRA experiment | Run | Condition |
-|---|---|---|---|---|
-| Neuron_RNA_cKO_1 | GSM5460849 | SRX11490981 | SRR15183990 | cKO |
-| Neuron_RNA_cKO_2 | GSM5460850 | SRX11490982 | SRR15183991 | cKO |
-| Neuron_RNA_cKO_3 | GSM5460851 | SRX11490983 | SRR15183992 | cKO |
-| Neuron_RNA_Control_1 | GSM5460852 | SRX11490984 | SRR15183993 | control |
-| Neuron_RNA_Control_2 | GSM5460853 | SRX11490985 | SRR15183994 | control |
-| Neuron_RNA_Control_3 | GSM5460854 | SRX11490986 | SRR15183995 | control |
+| Sample               | GEO        | SRA experiment | Run         | Condition |
+| -------------------- | ---------- | -------------- | ----------- | --------- |
+| Neuron_RNA_cKO_1     | GSM5460849 | SRX11490981    | SRR15183990 | cKO       |
+| Neuron_RNA_cKO_2     | GSM5460850 | SRX11490982    | SRR15183991 | cKO       |
+| Neuron_RNA_cKO_3     | GSM5460851 | SRX11490983    | SRR15183992 | cKO       |
+| Neuron_RNA_Control_1 | GSM5460852 | SRX11490984    | SRR15183993 | control   |
+| Neuron_RNA_Control_2 | GSM5460853 | SRX11490985    | SRR15183994 | control   |
+| Neuron_RNA_Control_3 | GSM5460854 | SRX11490986    | SRR15183995 | control   |
 
 All six public runs are single-end Illumina RNA-seq libraries. The paper describes the principal neuronal libraries as 75-bp single-end NextSeq 550 data.
 
@@ -172,10 +172,6 @@ The included `gcp-vm` profile is tuned to this project's current VM: 8 vCPUs,
 about 62 GiB usable RAM, and about 484 GiB usable disk. It runs Snakemake's
 local executor on the remote Linux machine; Google Compute Engine provides the
 machine, while Snakemake schedules the individual rules on it.
-
-Google One/Google AI storage for Drive, Gmail, and Photos is separate from
-Google Cloud Compute Engine. The VM and its provisioned disk use the Cloud
-Billing account attached to the Google Cloud project.
 
 ### First-time VM preparation
 
