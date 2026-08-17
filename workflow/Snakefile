@@ -456,7 +456,8 @@ rule multiqc:
         gene_body_summary="work/counts/gene_body_featureCounts.txt.summary"
     output:
         html="results/multiqc/multiqc_report.html",
-        data=directory("results/multiqc/multiqc_data")
+        data=directory("results/multiqc/multiqc_data"),
+        inputs="results/multiqc/multiqc_input_files.txt"
     conda:
         "envs/qc.yaml"
     log:
@@ -465,9 +466,11 @@ rule multiqc:
         r"""
         set -euo pipefail
         mkdir -p results/multiqc
-        multiqc work results/counts \
+        printf '%s\n' {input} > {output.inputs}
+        multiqc --file-list {output.inputs} \
           --config resources/multiqc_config.yaml \
           --outdir results/multiqc \
+          --filename multiqc_report.html \
           --force > {log} 2>&1
         """
 

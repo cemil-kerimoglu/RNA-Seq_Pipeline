@@ -1,7 +1,30 @@
 title: "SETD1B neuronal nuclear RNA-seq reanalysis"
 subtitle: "GSE180326 | control vs Setd1b cKO"
+# Keep the descriptive report title independent of stable filesystem paths.
+output_fn_name: "multiqc_report.html"
+data_dir_name: "multiqc_data"
 report_comment: >
   Modernized reproducible reanalysis scaffold. Inspect raw/post-trim FastQC,
   fastp, STAR, samtools and featureCounts metrics before interpreting DE results.
 show_analysis_paths: false
 show_analysis_time: true
+
+# Run FastQC twice so raw and post-fastp reports with related sample names do
+# not overwrite one another in a single FastQC module pass.
+module_order:
+  - fastqc:
+      name: "FastQC (raw reads)"
+      anchor: fastqc_raw
+      info: "Sequence-level QC before adapter and quality filtering."
+      path_filters:
+        - "*qc/raw/*_fastqc.zip"
+  - fastp
+  - fastqc:
+      name: "FastQC (trimmed reads)"
+      anchor: fastqc_trimmed
+      info: "Sequence-level QC after fastp adapter and quality filtering."
+      path_filters:
+        - "*qc/trimmed/*.trimmed_fastqc.zip"
+  - star
+  - samtools
+  - featurecounts
